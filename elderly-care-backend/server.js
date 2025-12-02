@@ -6,23 +6,26 @@ const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-const PORT = 5000;
+const PORT = process.env.PORT || 5000;  // ✅ IMPORTANTE: Usar PORT de Render
 
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
 // Ruta del archivo de datos
-const DATA_FILE = path.join(__dirname, 'data', 'devices.json');
+const DATA_DIR = path.join(__dirname, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'devices.json');
 
 // Crear directorio de datos si no existe
-if (!fs.existsSync(path.join(__dirname, 'data'))) {
-  fs.mkdirSync(path.join(__dirname, 'data'));
+if (!fs.existsSync(DATA_DIR)) {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  console.log('✅ Directorio /data creado');
 }
 
 // Inicializar archivo de datos si no existe
 if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify({ devices: [] }));
+  fs.writeFileSync(DATA_FILE, JSON.stringify({ devices: [] }, null, 2));
+  console.log('✅ Archivo devices.json inicializado');
 }
 
 // Funciones auxiliares
@@ -31,7 +34,7 @@ function readData() {
     const data = fs.readFileSync(DATA_FILE, 'utf8');
     return JSON.parse(data);
   } catch (error) {
-    console.error('Error leyendo datos:', error);
+    console.error('❌ Error leyendo datos:', error);
     return { devices: [] };
   }
 }
@@ -41,14 +44,41 @@ function writeData(data) {
     fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
     return true;
   } catch (error) {
-    console.error('Error escribiendo datos:', error);
+    console.error('❌ Error escribiendo datos:', error);
     return false;
   }
 }
 
 // ==================== ENDPOINTS ====================
 
-// 1. Registrar nuevo dispositivo (Reloj)
+// Root endpoint
+app.get('/', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: 'Elder Care API v1.0 - Running on Render',
+    endpoints: [
+      'GET /api/test',
+      'POST /api/devices/register',
+      'POST /api/health',
+      'GET /api/devices',
+      'GET /api/devices/:deviceId',
+      'DELETE /api/devices/:deviceId',
+      'PUT /api/devices/:deviceId'
+    ],
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Endpoint de prueba
+app.get('/api/test', (req, res) => {
+  res.json({ 
+    success: true, 
+    message: '✅ API funcionando correctamente en Render',
+    timestamp: new Date().toISOString()
+  });
+});
+
+// 1. Registrar nuevo dispositivo
 app.post('/api/devices/register', (req, res) => {
   const { deviceId, deviceName, ownerName } = req.body;
 
@@ -61,7 +91,6 @@ app.post('/api/devices/register', (req, res) => {
 
   const data = readData();
   
-  // Verificar si el dispositivo ya existe
   const existingDevice = data.devices.find(d => d.deviceId === deviceId);
   if (existingDevice) {
     return res.status(409).json({ 
@@ -70,7 +99,6 @@ app.post('/api/devices/register', (req, res) => {
     });
   }
 
-  // Crear nuevo dispositivo
   const newDevice = {
     id: uuidv4(),
     deviceId,
@@ -107,7 +135,7 @@ app.post('/api/devices/register', (req, res) => {
   }
 });
 
-// 2. Actualizar datos de salud (desde el reloj)
+// 2. Actualizar datos de salud
 app.post('/api/health', (req, res) => {
   const { deviceId, heartRate, steps, battery, location } = req.body;
 
@@ -128,7 +156,6 @@ app.post('/api/health', (req, res) => {
     });
   }
 
-  // Actualizar datos
   data.devices[deviceIndex].lastUpdate = new Date().toISOString();
   data.devices[deviceIndex].isOnline = true;
   
@@ -169,7 +196,6 @@ app.post('/api/health', (req, res) => {
 app.get('/api/devices', (req, res) => {
   const data = readData();
   
-  // Marcar dispositivos como offline si no se actualizan en 2 minutos
   const now = new Date();
   data.devices.forEach(device => {
     if (device.lastUpdate) {
@@ -187,7 +213,7 @@ app.get('/api/devices', (req, res) => {
   });
 });
 
-// 4. Obtener un dispositivo específico
+// 4. Obtener dispositivo específico
 app.get('/api/devices/:deviceId', (req, res) => {
   const { deviceId } = req.params;
   const data = readData();
@@ -201,7 +227,6 @@ app.get('/api/devices/:deviceId', (req, res) => {
     });
   }
   
-  // Verificar si está online
   if (device.lastUpdate) {
     const now = new Date();
     const lastUpdate = new Date(device.lastUpdate);
@@ -244,7 +269,7 @@ app.delete('/api/devices/:deviceId', (req, res) => {
   }
 });
 
-// 6. Actualizar nombre del dispositivo
+// 6. Actualizar dispositivo
 app.put('/api/devices/:deviceId', (req, res) => {
   const { deviceId } = req.params;
   const { deviceName, ownerName } = req.body;
@@ -281,20 +306,19 @@ app.put('/api/devices/:deviceId', (req, res) => {
   }
 });
 
-// Endpoint de prueba
-app.get('/api/test', (req, res) => {
-  res.json({ 
-    success: true, 
-    message: 'API funcionando correctamente',
-    timestamp: new Date().toISOString()
+// Manejo de errores 404
+app.use((req, res) => {
+  res.status(404).json({ 
+    success: false, 
+    message: 'Endpoint no encontrado' 
   });
 });
 
 // Iniciar servidor
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`\n====================================`);
-  console.log(`🚀 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📡 Acceso local: http://localhost:${PORT}`);
-  console.log(`🌐 Acceso red: http://192.168.1.9:${PORT}`);
-  console.log(`====================================\n`);
+  console.log('\n====================================');
+  console.log(`🚀 Elder Care API v1.0`);
+  console.log(`🌍 Servidor corriendo en puerto ${PORT}`);
+  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log('====================================\n');
 });
