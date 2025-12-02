@@ -1,0 +1,23 @@
+{
+  "devices": [
+    {
+      "id": "37955868-ed32-4a04-abcb-53be96614d41",
+      "deviceId": "WATCH-001",
+      "deviceName": "Reloj de Papá Luis",
+      "ownerName": "Luis López",
+      "registeredAt": "2025-12-02T01:02:44.713Z",
+      "lastUpdate": null,
+      "healthData": {
+        "heartRate": 0,
+        "steps": 0,
+        "battery": 0,
+        "location": {
+          "latitude": 0,
+          "longitude": 0,
+          "address": ""
+        }
+      },
+      "isOnline": false
+    }
+  ]
+}

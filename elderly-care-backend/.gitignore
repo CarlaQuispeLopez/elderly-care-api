@@ -1,5 +1,2 @@
 node_modules/
-.env
-data/devices.json
-*.log
-.DS_Store
+elderly-care-backend/node_modules/
