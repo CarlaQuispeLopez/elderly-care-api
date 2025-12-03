@@ -132,12 +132,23 @@ app.get('/api/test', (req, res) => {
 // ==================== SOS ENDPOINT ====================
 
 app.post('/api/sos', (req, res) => {
+  console.log('🚨 Recibiendo SOS:', JSON.stringify(req.body, null, 2));
+  
   const { deviceId, ownerDisplayName, location } = req.body;
 
-  if (!deviceId || !location) {
+  if (!deviceId) {
+    console.error('❌ deviceId faltante');
     return res.status(400).json({ 
       success: false, 
-      message: 'deviceId y location son requeridos' 
+      message: 'deviceId es requerido' 
+    });
+  }
+
+  if (!location || !location.latitude || !location.longitude) {
+    console.error('❌ location faltante o incompleta');
+    return res.status(400).json({ 
+      success: false, 
+      message: 'location con latitude y longitude son requeridos' 
     });
   }
 
@@ -145,20 +156,21 @@ app.post('/api/sos', (req, res) => {
   const device = data.devices.find(d => d.deviceId === deviceId);
 
   if (!device) {
+    console.error('❌ Dispositivo no encontrado:', deviceId);
     return res.status(404).json({ 
       success: false, 
-      message: 'Dispositivo no encontrado' 
+      message: 'Dispositivo no encontrado. Registre el dispositivo primero.' 
     });
   }
 
   const emergency = {
     id: uuidv4(),
     deviceId,
-    ownerDisplayName: ownerDisplayName || device.ownerDisplayName || device.ownerName,
+    ownerDisplayName: ownerDisplayName || device.ownerDisplayName || device.ownerName || 'Usuario',
     deviceName: device.deviceName,
     location: {
-      latitude: location.latitude,
-      longitude: location.longitude,
+      latitude: parseFloat(location.latitude),
+      longitude: parseFloat(location.longitude),
       address: location.address || ''
     },
     timestamp: new Date().toISOString(),
@@ -175,13 +187,14 @@ app.post('/api/sos', (req, res) => {
   activeEmergencies.push(emergency);
 
   // Emitir a todos los clientes conectados
+  console.log('📡 Emitiendo emergencia a todos los clientes conectados');
   io.emit('new_emergency', emergency);
 
-  console.log(`🚨 EMERGENCIA SOS: ${emergency.ownerDisplayName} - ${location.address}`);
+  console.log(`✅ EMERGENCIA REGISTRADA: ${emergency.ownerDisplayName} - ${location.address}`);
 
   res.json({ 
     success: true, 
-    message: 'Emergencia registrada',
+    message: 'Emergencia registrada y notificada',
     emergency 
   });
 });
@@ -221,6 +234,8 @@ app.post('/api/emergencies/:id/resolve', (req, res) => {
 
   // Notificar a clientes
   io.emit('emergency_resolved', { id });
+
+  console.log(`✅ Emergencia resuelta: ${id}`);
 
   res.json({ 
     success: true, 
@@ -273,6 +288,7 @@ app.post('/api/devices/register', (req, res) => {
   data.devices.push(newDevice);
   
   if (writeData(data)) {
+    console.log(`✅ Dispositivo registrado: ${deviceId} - ${ownerDisplayName}`);
     res.json({ 
       success: true, 
       message: 'Dispositivo registrado exitosamente',
