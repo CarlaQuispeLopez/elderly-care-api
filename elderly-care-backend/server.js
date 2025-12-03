@@ -1,20 +1,34 @@
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
+const http = require('http');
+const socketIo = require('socket.io');
 const fs = require('fs');
 const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-const PORT = process.env.PORT || 5000;  // ✅ IMPORTANTE: Usar PORT de Render
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: "*",
+    methods: ["GET", "POST"]
+  }
+});
+
+const PORT = process.env.PORT || 5000;
 
 // Middleware
 app.use(cors());
 app.use(bodyParser.json());
 
+// Datos en memoria para emergencias activas
+let activeEmergencies = [];
+
 // Ruta del archivo de datos
 const DATA_DIR = path.join(__dirname, 'data');
 const DATA_FILE = path.join(DATA_DIR, 'devices.json');
+const EMERGENCY_FILE = path.join(DATA_DIR, 'emergencies.json');
 
 // Crear directorio de datos si no existe
 if (!fs.existsSync(DATA_DIR)) {
@@ -22,10 +36,15 @@ if (!fs.existsSync(DATA_DIR)) {
   console.log('✅ Directorio /data creado');
 }
 
-// Inicializar archivo de datos si no existe
+// Inicializar archivos
 if (!fs.existsSync(DATA_FILE)) {
   fs.writeFileSync(DATA_FILE, JSON.stringify({ devices: [] }, null, 2));
   console.log('✅ Archivo devices.json inicializado');
+}
+
+if (!fs.existsSync(EMERGENCY_FILE)) {
+  fs.writeFileSync(EMERGENCY_FILE, JSON.stringify({ emergencies: [] }, null, 2));
+  console.log('✅ Archivo emergencies.json inicializado');
 }
 
 // Funciones auxiliares
@@ -49,15 +68,48 @@ function writeData(data) {
   }
 }
 
+function readEmergencies() {
+  try {
+    const data = fs.readFileSync(EMERGENCY_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    return { emergencies: [] };
+  }
+}
+
+function writeEmergencies(data) {
+  try {
+    fs.writeFileSync(EMERGENCY_FILE, JSON.stringify(data, null, 2));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+// ==================== WEBSOCKET ====================
+
+io.on('connection', (socket) => {
+  console.log('✅ Cliente conectado:', socket.id);
+
+  // Enviar emergencias activas al conectarse
+  socket.emit('active_emergencies', activeEmergencies);
+
+  socket.on('disconnect', () => {
+    console.log('❌ Cliente desconectado:', socket.id);
+  });
+});
+
 // ==================== ENDPOINTS ====================
 
-// Root endpoint
 app.get('/', (req, res) => {
   res.json({ 
     success: true, 
-    message: 'Elder Care API v1.0 - Running on Render',
+    message: 'Elder Care SOS API v2.0',
     endpoints: [
       'GET /api/test',
+      'POST /api/sos - Enviar emergencia SOS',
+      'GET /api/emergencies - Obtener emergencias activas',
+      'POST /api/emergencies/:id/resolve - Resolver emergencia',
       'POST /api/devices/register',
       'POST /api/health',
       'GET /api/devices',
@@ -69,18 +121,116 @@ app.get('/', (req, res) => {
   });
 });
 
-// Endpoint de prueba
 app.get('/api/test', (req, res) => {
   res.json({ 
     success: true, 
-    message: '✅ API funcionando correctamente en Render',
+    message: '✅ API funcionando correctamente',
     timestamp: new Date().toISOString()
   });
 });
 
-// 1. Registrar nuevo dispositivo
+// ==================== SOS ENDPOINT ====================
+
+app.post('/api/sos', (req, res) => {
+  const { deviceId, ownerDisplayName, location } = req.body;
+
+  if (!deviceId || !location) {
+    return res.status(400).json({ 
+      success: false, 
+      message: 'deviceId y location son requeridos' 
+    });
+  }
+
+  const data = readData();
+  const device = data.devices.find(d => d.deviceId === deviceId);
+
+  if (!device) {
+    return res.status(404).json({ 
+      success: false, 
+      message: 'Dispositivo no encontrado' 
+    });
+  }
+
+  const emergency = {
+    id: uuidv4(),
+    deviceId,
+    ownerDisplayName: ownerDisplayName || device.ownerDisplayName || device.ownerName,
+    deviceName: device.deviceName,
+    location: {
+      latitude: location.latitude,
+      longitude: location.longitude,
+      address: location.address || ''
+    },
+    timestamp: new Date().toISOString(),
+    status: 'active',
+    resolvedAt: null
+  };
+
+  // Guardar en archivo
+  const emergencyData = readEmergencies();
+  emergencyData.emergencies.push(emergency);
+  writeEmergencies(emergencyData);
+
+  // Guardar en memoria
+  activeEmergencies.push(emergency);
+
+  // Emitir a todos los clientes conectados
+  io.emit('new_emergency', emergency);
+
+  console.log(`🚨 EMERGENCIA SOS: ${emergency.ownerDisplayName} - ${location.address}`);
+
+  res.json({ 
+    success: true, 
+    message: 'Emergencia registrada',
+    emergency 
+  });
+});
+
+// Obtener emergencias activas
+app.get('/api/emergencies', (req, res) => {
+  res.json({ 
+    success: true, 
+    emergencies: activeEmergencies 
+  });
+});
+
+// Resolver emergencia
+app.post('/api/emergencies/:id/resolve', (req, res) => {
+  const { id } = req.params;
+  
+  const index = activeEmergencies.findIndex(e => e.id === id);
+  
+  if (index === -1) {
+    return res.status(404).json({ 
+      success: false, 
+      message: 'Emergencia no encontrada' 
+    });
+  }
+
+  activeEmergencies[index].status = 'resolved';
+  activeEmergencies[index].resolvedAt = new Date().toISOString();
+
+  // Actualizar archivo
+  const emergencyData = readEmergencies();
+  const fileIndex = emergencyData.emergencies.findIndex(e => e.id === id);
+  if (fileIndex !== -1) {
+    emergencyData.emergencies[fileIndex].status = 'resolved';
+    emergencyData.emergencies[fileIndex].resolvedAt = new Date().toISOString();
+    writeEmergencies(emergencyData);
+  }
+
+  // Notificar a clientes
+  io.emit('emergency_resolved', { id });
+
+  res.json({ 
+    success: true, 
+    message: 'Emergencia resuelta' 
+  });
+});
+
+// Registrar dispositivo (ACTUALIZADO)
 app.post('/api/devices/register', (req, res) => {
-  const { deviceId, deviceName, ownerName } = req.body;
+  const { deviceId, deviceName, ownerName, ownerDisplayName } = req.body;
 
   if (!deviceId || !deviceName) {
     return res.status(400).json({ 
@@ -95,7 +245,7 @@ app.post('/api/devices/register', (req, res) => {
   if (existingDevice) {
     return res.status(409).json({ 
       success: false, 
-      message: 'El dispositivo ya está registrado' 
+      message: 'Dispositivo ya registrado' 
     });
   }
 
@@ -104,6 +254,7 @@ app.post('/api/devices/register', (req, res) => {
     deviceId,
     deviceName,
     ownerName: ownerName || 'Adulto Mayor',
+    ownerDisplayName: ownerDisplayName || ownerName || 'Adulto Mayor',
     registeredAt: new Date().toISOString(),
     lastUpdate: null,
     healthData: {
@@ -135,7 +286,7 @@ app.post('/api/devices/register', (req, res) => {
   }
 });
 
-// 2. Actualizar datos de salud
+// Actualizar datos de salud
 app.post('/api/health', (req, res) => {
   const { deviceId, heartRate, steps, battery, location } = req.body;
 
@@ -182,17 +333,17 @@ app.post('/api/health', (req, res) => {
   if (writeData(data)) {
     res.json({ 
       success: true, 
-      message: 'Datos actualizados exitosamente' 
+      message: 'Datos actualizados' 
     });
   } else {
     res.status(500).json({ 
       success: false, 
-      message: 'Error al guardar datos' 
+      message: 'Error al guardar' 
     });
   }
 });
 
-// 3. Obtener todos los dispositivos
+// Obtener todos los dispositivos
 app.get('/api/devices', (req, res) => {
   const data = readData();
   
@@ -213,7 +364,7 @@ app.get('/api/devices', (req, res) => {
   });
 });
 
-// 4. Obtener dispositivo específico
+// Obtener dispositivo específico
 app.get('/api/devices/:deviceId', (req, res) => {
   const { deviceId } = req.params;
   const data = readData();
@@ -240,7 +391,7 @@ app.get('/api/devices/:deviceId', (req, res) => {
   });
 });
 
-// 5. Eliminar dispositivo
+// Eliminar dispositivo
 app.delete('/api/devices/:deviceId', (req, res) => {
   const { deviceId } = req.params;
   const data = readData();
@@ -259,17 +410,17 @@ app.delete('/api/devices/:deviceId', (req, res) => {
   if (writeData(data)) {
     res.json({ 
       success: true, 
-      message: 'Dispositivo eliminado exitosamente' 
+      message: 'Dispositivo eliminado' 
     });
   } else {
     res.status(500).json({ 
       success: false, 
-      message: 'Error al eliminar dispositivo' 
+      message: 'Error al eliminar' 
     });
   }
 });
 
-// 6. Actualizar dispositivo
+// Actualizar dispositivo
 app.put('/api/devices/:deviceId', (req, res) => {
   const { deviceId } = req.params;
   const { deviceName, ownerName } = req.body;
@@ -314,11 +465,11 @@ app.use((req, res) => {
   });
 });
 
-// Iniciar servidor
-app.listen(PORT, '0.0.0.0', () => {
+// Iniciar servidor con WebSocket
+server.listen(PORT, '0.0.0.0', () => {
   console.log('\n====================================');
-  console.log(`🚀 Elder Care API v1.0`);
-  console.log(`🌍 Servidor corriendo en puerto ${PORT}`);
-  console.log(`📡 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`🚀 Elder Care SOS API v2.0`);
+  console.log(`🌐 Servidor corriendo en puerto ${PORT}`);
+  console.log(`🔴 WebSocket activo`);
   console.log('====================================\n');
 });
